@@ -14,7 +14,7 @@ from tqdm import tqdm
 import horovod.torch as hvd
 import utils
 from data import VCDBPairDataset,FSAVCDBPairDataset
-from model import NetVLAD, MoCo, NeXtVLAD, LSTMModule, GRUModule, CTCA, CTCA_MAX
+from model import MoCo, CTCA_LATE_MAXIMUM
 import wandb
 from scipy.spatial.distance import cdist
 import h5py
@@ -55,7 +55,7 @@ def train(args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_sz,
                               sampler=train_sampler, drop_last=True, **kwargs)
 
-    model = CTCA_MAX(feature_size=args.pca_components, feedforward =args.feedforward, nlayers=args.num_layers, dropout=0.2)
+    model = CTCA_LATE_MAXIMUM(frame_feature_size=args.frame_feature_size,temporal_feature_size= args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers, dropout=0.2)
     # model = NeXtVLAD(feature_size=args.pca_components)
     model = MoCo(model, dim=args.output_dim, K=args.moco_k, m=args.moco_m, T=args.moco_t,mlp=args.mlp)
 
@@ -142,8 +142,6 @@ def train(args):
             os.makedirs(args.model_path,exist_ok=True)
             torch.save(model.encoder_q.state_dict(), os.path.join(args.model_path,f'model_{epoch}.pth'))
 
-        if epoch == 40:
-            break
     if args.wandb:
         run.finish()
     del model
@@ -298,7 +296,6 @@ def query_vs_database(model, dataset, args):
 
             del similarities
             del all_db
-
         if args.wandb:
             run.finish()
 
@@ -350,7 +347,7 @@ def main():
                         help='Path to the kv dataset that contains the features of the train set')
     parser.add_argument('-sp', '--segment_feature_path', type=str, default='/workspace/CTCA/pre_processing/vcdb-segment_l2norm_89325.hdf5',
                         help='Path to the kv dataset that contains the features of the train set')
-    parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/vcdb-byol_rmac-segment_89325_TCA_momentum',
+    parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/1024+1024_late_fc_STCA_bias_off',
                         help='Directory where the generated files will be stored')
     parser.add_argument('-a', '--augmentation', type=bool, default=False,
                         help='augmentation of clip-level features')
@@ -379,8 +376,11 @@ def main():
     parser.add_argument('-wd', '--weight_decay', type=float, default=1e-4,
                         help='Regularization parameter of the DML network. Default: 10^-4')
 
-    parser.add_argument('-pc', '--pca_components', type=int, default=2048,
+    parser.add_argument('-ffs', '--frame_feature_size', type=int, default=1024,
                         help='Number of components of the PCA module.')
+    parser.add_argument('-tfs', '--temporal_feature_size', type=int, default=1024,
+                        help='Number of components of the PCA module.')
+
     parser.add_argument('-ps', '--padding_size', type=int, default=64,
                         help='Padding size of the input data at temporal axis.')
     parser.add_argument('-rs', '--random_sampling', action='store_true',
@@ -461,7 +461,7 @@ def main():
         raise Exception('[ERROR] Not supported evaluation dataset. '
                         'Supported options: \"CC_WEB_VIDEO\", \"VCDB\", \"FIVR-200K\", \"FIVR-5K\", \"EVVE\"')
 
-    model = CTCA_MAX(feature_size=args.pca_components, feedforward=args.feedforward , nlayers=args.num_layers)
+    model = CTCA_LATE_MAXIMUM(frame_feature_size=args.frame_feature_size, temporal_feature_size=args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers)
 
     if os.path.exists(args.eval_feature_path):
         os.remove(args.eval_feature_path)

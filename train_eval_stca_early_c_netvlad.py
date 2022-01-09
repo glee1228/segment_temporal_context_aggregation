@@ -14,7 +14,7 @@ from tqdm import tqdm
 import horovod.torch as hvd
 import utils
 from data import VCDBPairDataset,FSAVCDBPairDataset
-from model import NetVLAD, MoCo, NeXtVLAD, LSTMModule, GRUModule, CTCA, CTCA_LATE
+from model import MoCo, CTCA_NetVLAD
 import wandb
 from scipy.spatial.distance import cdist
 import h5py
@@ -55,9 +55,9 @@ def train(args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_sz,
                               sampler=train_sampler, drop_last=True, **kwargs)
 
-    model = CTCA_LATE(frame_feature_size=args.frame_feature_size,temporal_feature_size= args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers, dropout=0.2)
+    model = CTCA_NetVLAD(feature_size=args.pca_components, feedforward=args.feedforward, nlayers=args.num_layers, netvlad_clusters=args.netvlad_clusters, netvlad_output_dim=args.netvlad_output_dim)
     # model = NeXtVLAD(feature_size=args.pca_components)
-    model = MoCo(model, dim=args.output_dim, K=args.moco_k, m=args.moco_m, T=args.moco_t,mlp=args.mlp)
+    model = MoCo(model, dim=args.netvlad_output_dim, K=args.moco_k, m=args.moco_m, T=args.moco_t,mlp=args.mlp)
 
     # By default, Adasum doesn't need scaling up learning rate.
     lr_scaler = hvd.size() if not args.use_adasum else 1
@@ -99,7 +99,7 @@ def train(args):
 
     # Wandb Initialization
     if args.wandb:
-        run = wandb.init(project= args.dataset + '_' + str(args.output_dim) + '_train' , notes='')
+        run = wandb.init(project= args.dataset + '_' + str(args.netvlad_output_dim) + '_train_netvlad' , notes='')
         wandb.config.update(args)
 
     start = datetime.now()
@@ -141,6 +141,9 @@ def train(args):
             print("Saving model...")
             os.makedirs(args.model_path,exist_ok=True)
             torch.save(model.encoder_q.state_dict(), os.path.join(args.model_path,f'model_{epoch}.pth'))
+
+        if epoch == 20:
+            break
 
     if args.wandb:
         run.finish()
@@ -217,7 +220,7 @@ def query_vs_database(model, dataset, args):
     # Wandb Initialization
     run = None
     if args.wandb:
-        run = wandb.init(project= args.dataset + '_' + str(args.output_dim) + '_eval' , notes='')
+        run = wandb.init(project= args.dataset + '_' + str(args.netvlad_output_dim) + '_eval_netvlad' , notes='')
         wandb.config.update(args)
 
     model_list = os.listdir(args.model_path)
@@ -347,16 +350,17 @@ def main():
                         help='Path to the kv dataset that contains the features of the train set')
     parser.add_argument('-sp', '--segment_feature_path', type=str, default='/workspace/CTCA/pre_processing/vcdb-segment_l2norm_89325.hdf5',
                         help='Path to the kv dataset that contains the features of the train set')
-    parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/vcdb-byol_rmac-segment_89325_TCA_momentum',
+    parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/vcdb-byol_rmac-segment-netvlad-ganet',
                         help='Directory where the generated files will be stored')
     parser.add_argument('-a', '--augmentation', type=bool, default=False,
                         help='augmentation of clip-level features')
-    # parser.add_argument('-nc', '--num_clusters', type=int, default=256,
-    #                     help='Number of clusters of the NetVLAD model')
+    parser.add_argument('-nc', '--netvlad_clusters', type=int, default=64,
+                        help='Num of Clusters of the NetVLAD model')
+    parser.add_argument('-nod', '--netvlad_output_dim', type=int, default=1024,
+                        help='Dimension of the output embedding of the NetVLAD model')
     parser.add_argument('-ff', '--feedforward', type=int, default=4096,
                         help='Number of dim of the Transformer feedforward.')
-    parser.add_argument('-od', '--output_dim', type=int, default=2048,
-                        help='Dimention of the output embedding of the NetVLAD model')
+
     parser.add_argument('-nl', '--num_layers', type=int, default=1,
                         help='Number of layers')
     parser.add_argument('-ni', '--normalize_input', action='store_true',
@@ -369,18 +373,15 @@ def main():
     parser.add_argument('-bs', '--batch_sz', type=int, default=64,
                         help='Number of triplets fed every training iteration. '
                              'Default: 256')
-    parser.add_argument('-lr', '--learning_rate', type=float, default=1e-5,
+    parser.add_argument('-lr', '--learning_rate', type=float, default=5e-6,
                         help='Learning rate of the DML network. Default: 10^-4')
     parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                         help='momentum of SGD solver')
     parser.add_argument('-wd', '--weight_decay', type=float, default=1e-4,
                         help='Regularization parameter of the DML network. Default: 10^-4')
 
-    parser.add_argument('-ffs', '--frame_feature_size', type=int, default=768,
+    parser.add_argument('-pc', '--pca_components', type=int, default=2048,
                         help='Number of components of the PCA module.')
-    parser.add_argument('-tfs', '--temporal_feature_size', type=int, default=256,
-                        help='Number of components of the PCA module.')
-
     parser.add_argument('-ps', '--padding_size', type=int, default=64,
                         help='Padding size of the input data at temporal axis.')
     parser.add_argument('-rs', '--random_sampling', action='store_true',
@@ -391,7 +392,7 @@ def main():
                         help='Number of workers of dataloader')
 
     # moco specific configs:
-    parser.add_argument('-mk','--moco_k', default=4096, type=int,
+    parser.add_argument('-mk','--moco_k', default=65536, type=int,
                         help='queue size; number of negative keys (default: 65536)')
     parser.add_argument('-mm','--moco_m', default=0.999, type=float,
                         help='moco momentum of updating key encoder (default: 0.999)')
@@ -434,11 +435,11 @@ def main():
     args.cuda = torch.cuda.is_available()
 
     # clear model path
-    import shutil
-    if os.path.exists(args.model_path):
-        shutil.rmtree(args.model_path)
-
-    train(args)
+    # import shutil
+    # if os.path.exists(args.model_path):
+    #     shutil.rmtree(args.model_path)
+    #
+    # train(args)
 
 
     if 'CC_WEB' in args.dataset:
@@ -461,7 +462,7 @@ def main():
         raise Exception('[ERROR] Not supported evaluation dataset. '
                         'Supported options: \"CC_WEB_VIDEO\", \"VCDB\", \"FIVR-200K\", \"FIVR-5K\", \"EVVE\"')
 
-    model = CTCA_LATE(frame_feature_size=args.frame_feature_size, temporal_feature_size=args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers)
+    model = CTCA_NetVLAD(feature_size=args.pca_components, feedforward=args.feedforward,nlayers=args.num_layers, netvlad_clusters=args.netvlad_clusters, netvlad_output_dim=args.netvlad_output_dim)
 
     if os.path.exists(args.eval_feature_path):
         os.remove(args.eval_feature_path)

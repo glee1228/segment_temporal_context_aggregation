@@ -2018,29 +2018,4 @@ def concat_all_gather(tensor):
     return hvd.allgather(tensor.contiguous())
 
 
-class VideoComparator(nn.Module):
-    def __init__(self):
-        super(VideoComparator, self).__init__()
-        self.pad = nn.ReplicationPad2d(1)
-        self.conv1 = nn.Conv2d(1, 32, (3, 3))
-        self.mpool1 = nn.MaxPool2d((2, 2), 2)
-        self.conv2 = nn.Conv2d(32, 64, (3, 3))
-        self.mpool2 = nn.MaxPool2d((2, 2), 2)
-        self.conv3 = nn.Conv2d(64, 128, (3, 3))
-        self.fconv = nn.Conv2d(128, 1, (1, 1))
 
-    def forward(self, sim_matrix):
-        sim = sim_matrix.reshape(1, 1, sim_matrix.size(
-        )[-2], sim_matrix.size()[-1])  # (1, 1, m, n)
-        sim = self.pad(sim)
-        sim = F.relu(self.conv1(sim))
-        sim = self.mpool1(sim)
-        sim = self.pad(sim)
-        sim = F.relu(self.conv2(sim))
-        sim = self.mpool2(sim)
-        sim = self.pad(sim)
-        sim = F.relu(self.conv3(sim))
-        sim = self.fconv(sim)
-        sim = torch.clamp(sim, -1.0, 1.0) / 2.0 + 0.5
-        sim = sim.reshape(sim.size()[-2], sim.size()[-1])
-        return sim

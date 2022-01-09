@@ -14,7 +14,7 @@ from tqdm import tqdm
 import horovod.torch as hvd
 import utils
 from data import VCDBPairDataset,FSAVCDBPairDataset
-from model import NetVLAD, MoCo, NeXtVLAD, LSTMModule, GRUModule, CTCA, CTCA_FC
+from model import MoCo, CTCA
 import wandb
 from scipy.spatial.distance import cdist
 import h5py
@@ -55,7 +55,7 @@ def train(args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_sz,
                               sampler=train_sampler, drop_last=True, **kwargs)
 
-    model = CTCA_FC(feature_size=args.pca_components, feedforward =args.feedforward, nlayers=args.num_layers, dropout=0.2)
+    model = CTCA(feature_size=args.pca_components, feedforward =args.feedforward, nlayers=args.num_layers, dropout=0.2)
     # model = NeXtVLAD(feature_size=args.pca_components)
     model = MoCo(model, dim=args.output_dim, K=args.moco_k, m=args.moco_m, T=args.moco_t,mlp=args.mlp)
 
@@ -99,7 +99,7 @@ def train(args):
 
     # Wandb Initialization
     if args.wandb:
-        run = wandb.init(project= args.dataset + '_' + str(args.output_dim) + '_train' , notes='')
+        run = wandb.init(project= args.dataset + '_' + str(args.pca_components) + '_train' , notes='')
         wandb.config.update(args)
 
     start = datetime.now()
@@ -219,7 +219,7 @@ def query_vs_database(model, dataset, args):
     # Wandb Initialization
     run = None
     if args.wandb:
-        run = wandb.init(project= args.dataset + '_' + str(args.output_dim) + '_eval' , notes='')
+        run = wandb.init(project= args.dataset + '_' + str(args.pca_components) + '_eval' , notes='')
         wandb.config.update(args)
 
     model_list = os.listdir(args.model_path)
@@ -350,7 +350,7 @@ def main():
                         help='Path to the kv dataset that contains the features of the train set')
     parser.add_argument('-sp', '--segment_feature_path', type=str, default='/workspace/CTCA/pre_processing/vcdb-segment_l2norm_89325.hdf5',
                         help='Path to the kv dataset that contains the features of the train set')
-    parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/vcdb-byol_rmac-segment-earlyfusion-w-reduction',
+    parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/vcdb-byol_rmac-segment_89325_TCA_momentum',
                         help='Directory where the generated files will be stored')
     parser.add_argument('-a', '--augmentation', type=bool, default=False,
                         help='augmentation of clip-level features')
@@ -358,7 +358,7 @@ def main():
     #                     help='Number of clusters of the NetVLAD model')
     parser.add_argument('-ff', '--feedforward', type=int, default=4096,
                         help='Number of dim of the Transformer feedforward.')
-    parser.add_argument('-od', '--output_dim', type=int, default=1024,
+    parser.add_argument('-od', '--output_dim', type=int, default=2048,
                         help='Dimention of the output embedding of the NetVLAD model')
     parser.add_argument('-nl', '--num_layers', type=int, default=1,
                         help='Number of layers')
@@ -391,9 +391,9 @@ def main():
                         help='Number of workers of dataloader')
 
     # moco specific configs:
-    parser.add_argument('-mk','--moco_k', default=4096, type=int,
+    parser.add_argument('-mk','--moco_k', default=65536, type=int,
                         help='queue size; number of negative keys (default: 65536)')
-    parser.add_argument('-mm','--moco_m', default=0.0, type=float,
+    parser.add_argument('-mm','--moco_m', default=0.999, type=float,
                         help='moco momentum of updating key encoder (default: 0.999)')
     parser.add_argument('-mt','--moco_t', default=0.07, type=float,
                         help='softmax temperature (default: 0.07)')
@@ -409,10 +409,10 @@ def main():
                         help='use adasum algorithm to do reduction')
 
     # eval configs:
-    parser.add_argument('-d', '--dataset', type=str, default='FIVR-5K',
+    parser.add_argument('-d', '--dataset', type=str, default='FIVR-200K',
                         help='Name of evaluation dataset. Options: CC_WEB_VIDEO, VCDB, '
                              '\"FIVR-200K\", \"FIVR-5K\", \"EVVE\"')
-    parser.add_argument('-efp', '--eval_feature_path', type=str, default='/workspace/CTCA/pre_processing/fivr-byol_rmac_segment_l2norm-earlyfusion-w-reduction.hdf5',
+    parser.add_argument('-efp', '--eval_feature_path', type=str, default='/workspace/CTCA/pre_processing/fivr-byol_rmac_segment_l2norm.hdf5',
                         help='Path to the .hdf5 file that contains the features of the dataset')
     parser.add_argument('-effp', '--eval_frame_feature_path', type=str, default='/workspace/CTCA/pre_processing/fivr-byol_rmac_187563.hdf5',
                         help='Path to the .hdf5 file that contains the features of the dataset')
@@ -461,7 +461,7 @@ def main():
         raise Exception('[ERROR] Not supported evaluation dataset. '
                         'Supported options: \"CC_WEB_VIDEO\", \"VCDB\", \"FIVR-200K\", \"FIVR-5K\", \"EVVE\"')
 
-    model = CTCA_FC(feature_size=args.pca_components, feedforward=args.feedforward , nlayers=args.num_layers)
+    model = CTCA(feature_size=args.pca_components, feedforward=args.feedforward , nlayers=args.num_layers)
 
     if os.path.exists(args.eval_feature_path):
         os.remove(args.eval_feature_path)

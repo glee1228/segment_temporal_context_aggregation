@@ -14,7 +14,7 @@ from tqdm import tqdm
 import horovod.torch as hvd
 import utils
 from data import VCDBPairDataset,FSAVCDBPairDataset
-from model import NetVLAD, MoCo, NeXtVLAD, LSTMModule, GRUModule, CTCA, CTCA_LATE_NetVLAD_PLUS
+from model import MoCo,  CTCA_LATE
 import wandb
 from scipy.spatial.distance import cdist
 import h5py
@@ -55,7 +55,7 @@ def train(args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_sz,
                               sampler=train_sampler, drop_last=True, **kwargs)
 
-    model = CTCA_LATE_NetVLAD_PLUS(frame_feature_size=args.frame_feature_size, temporal_feature_size=args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers,netvlad_clusters=args.netvlad_clusters, netvlad_output_dim=args.netvlad_output_dim)
+    model = CTCA_LATE(frame_feature_size=args.frame_feature_size,temporal_feature_size= args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers, dropout=0.2)
     # model = NeXtVLAD(feature_size=args.pca_components)
     model = MoCo(model, dim=args.output_dim, K=args.moco_k, m=args.moco_m, T=args.moco_t,mlp=args.mlp)
 
@@ -351,7 +351,8 @@ def main():
                         help='Directory where the generated files will be stored')
     parser.add_argument('-a', '--augmentation', type=bool, default=False,
                         help='augmentation of clip-level features')
-
+    # parser.add_argument('-nc', '--num_clusters', type=int, default=256,
+    #                     help='Number of clusters of the NetVLAD model')
     parser.add_argument('-ff', '--feedforward', type=int, default=4096,
                         help='Number of dim of the Transformer feedforward.')
     parser.add_argument('-od', '--output_dim', type=int, default=2048,
@@ -362,11 +363,6 @@ def main():
                         help='If true, descriptor-wise L2 normalization is applied to input')
     parser.add_argument('-nn', '--neg_num', type=int, default=16,
                         help='Number of negative samples of each batch')
-
-    parser.add_argument('-nc', '--netvlad_clusters', type=int, default=16,
-                        help='Num of Clusters of the NetVLAD model')
-    parser.add_argument('-nod', '--netvlad_output_dim', type=int, default=512,
-                        help='Dimension of the output embedding of the NetVLAD model')
 
     parser.add_argument('-e', '--epochs', type=int, default=61,
                         help='Number of epochs to train the DML network. Default: 5')
@@ -438,11 +434,11 @@ def main():
     args.cuda = torch.cuda.is_available()
 
     # clear model path
-    # import shutil
-    # if os.path.exists(args.model_path):
-    #     shutil.rmtree(args.model_path)
-    #
-    # train(args)
+    import shutil
+    if os.path.exists(args.model_path):
+        shutil.rmtree(args.model_path)
+
+    train(args)
 
 
     if 'CC_WEB' in args.dataset:
@@ -465,7 +461,7 @@ def main():
         raise Exception('[ERROR] Not supported evaluation dataset. '
                         'Supported options: \"CC_WEB_VIDEO\", \"VCDB\", \"FIVR-200K\", \"FIVR-5K\", \"EVVE\"')
 
-    model = CTCA_LATE_NetVLAD_PLUS(frame_feature_size=args.frame_feature_size, temporal_feature_size=args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers,netvlad_clusters=args.netvlad_clusters, netvlad_output_dim=args.netvlad_output_dim)
+    model = CTCA_LATE(frame_feature_size=args.frame_feature_size, temporal_feature_size=args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers)
 
     if os.path.exists(args.eval_feature_path):
         os.remove(args.eval_feature_path)

@@ -14,7 +14,7 @@ from tqdm import tqdm
 import horovod.torch as hvd
 import utils
 from data import VCDBPairDataset
-from model import NetVLAD, MoCo, NeXtVLAD, LSTMModule, GRUModule, TCA
+from model import MoCo, TCA
 import wandb
 
 np.random.seed(0)

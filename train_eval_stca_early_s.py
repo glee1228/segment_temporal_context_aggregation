@@ -14,7 +14,7 @@ from tqdm import tqdm
 import horovod.torch as hvd
 import utils
 from data import VCDBPairDataset,FSAVCDBPairDataset
-from model import NetVLAD, MoCo, NeXtVLAD, LSTMModule, GRUModule, CTCA
+from model import  MoCo,CTCA
 import wandb
 from scipy.spatial.distance import cdist
 import h5py
@@ -99,7 +99,7 @@ def train(args):
 
     # Wandb Initialization
     if args.wandb:
-        run = wandb.init(project= args.dataset + '_' + str(args.pca_components) + '_train' , notes='')
+        run = wandb.init(project= args.dataset + '_' + str(args.output_dim) + '_train' , notes='')
         wandb.config.update(args)
 
     start = datetime.now()
@@ -219,7 +219,7 @@ def query_vs_database(model, dataset, args):
     # Wandb Initialization
     run = None
     if args.wandb:
-        run = wandb.init(project= args.dataset + '_' + str(args.pca_components) + '_eval' , notes='')
+        run = wandb.init(project= args.dataset + '_' + str(args.output_dim) + '_eval' , notes='')
         wandb.config.update(args)
 
     model_list = os.listdir(args.model_path)
@@ -339,6 +339,7 @@ def fivr_concat_features(new_concat_feature_path , eval_frame_feature_path, eval
                         print(i)
 
             except:
+                breakpoint()
                 print(vid,' is not exists')
 
     print('...concat features saved')
@@ -350,7 +351,7 @@ def main():
                         help='Path to the kv dataset that contains the features of the train set')
     parser.add_argument('-sp', '--segment_feature_path', type=str, default='/workspace/CTCA/pre_processing/vcdb-segment_l2norm_89325.hdf5',
                         help='Path to the kv dataset that contains the features of the train set')
-    parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/vcdb-byol_rmac-segment_89325_TCA_momentum',
+    parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/vcdb-byol_rmac-segment-1024+1024-late+plus-wiz',
                         help='Directory where the generated files will be stored')
     parser.add_argument('-a', '--augmentation', type=bool, default=False,
                         help='augmentation of clip-level features')
@@ -358,7 +359,7 @@ def main():
     #                     help='Number of clusters of the NetVLAD model')
     parser.add_argument('-ff', '--feedforward', type=int, default=4096,
                         help='Number of dim of the Transformer feedforward.')
-    parser.add_argument('-od', '--output_dim', type=int, default=2048,
+    parser.add_argument('-od', '--output_dim', type=int, default=1024,
                         help='Dimention of the output embedding of the NetVLAD model')
     parser.add_argument('-nl', '--num_layers', type=int, default=1,
                         help='Number of layers')
@@ -391,9 +392,9 @@ def main():
                         help='Number of workers of dataloader')
 
     # moco specific configs:
-    parser.add_argument('-mk','--moco_k', default=65536, type=int,
+    parser.add_argument('-mk','--moco_k', default=4096, type=int,
                         help='queue size; number of negative keys (default: 65536)')
-    parser.add_argument('-mm','--moco_m', default=0.999, type=float,
+    parser.add_argument('-mm','--moco_m', default=0.0, type=float,
                         help='moco momentum of updating key encoder (default: 0.999)')
     parser.add_argument('-mt','--moco_t', default=0.07, type=float,
                         help='softmax temperature (default: 0.07)')

@@ -1,12 +1,11 @@
+
 import argparse
 import os
 from datetime import datetime
 
 import numpy as np
 import torch
-import torch.distributed as dist
-import torch.multiprocessing as mp
-import torch.nn as nn
+
 from torch.utils.data import DataLoader, BatchSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
@@ -14,11 +13,17 @@ from tqdm import tqdm
 import horovod.torch as hvd
 import utils
 from data import VCDBPairDataset,FSAVCDBPairDataset
-from model import NetVLAD, MoCo, NeXtVLAD, LSTMModule, GRUModule, CTCA, CTCA_LATE_FC
+from model import MoCo,  CTCA
 import wandb
 from scipy.spatial.distance import cdist
 import h5py
 from data import FeatureDataset
+
+import matplotlib.pyplot as pp
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.manifold import TSNE
+
 np.random.seed(0)
 torch.manual_seed(0)
 torch.cuda.manual_seed_all(0)
@@ -26,6 +31,7 @@ torch.cuda.manual_seed_all(0)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 torch.multiprocessing.set_sharing_strategy('file_system')
+
 
 
 def train(args):
@@ -55,7 +61,7 @@ def train(args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_sz,
                               sampler=train_sampler, drop_last=True, **kwargs)
 
-    model = CTCA_LATE_FC(frame_feature_size=args.frame_feature_size,temporal_feature_size= args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers, dropout=0.2)
+    model = CTCA(feature_size=args.pca_components, nlayers=args.num_layers, dropout=0.2)
     # model = NeXtVLAD(feature_size=args.pca_components)
     model = MoCo(model, dim=args.output_dim, K=args.moco_k, m=args.moco_m, T=args.moco_t,mlp=args.mlp)
 
@@ -99,7 +105,7 @@ def train(args):
 
     # Wandb Initialization
     if args.wandb:
-        run = wandb.init(project= args.dataset + '_' + str(args.output_dim) + '_train' , notes='')
+        run = wandb.init(project= args.dataset + '_' + str(args.pca_components) + '_train' , notes='')
         wandb.config.update(args)
 
     start = datetime.now()
@@ -141,6 +147,9 @@ def train(args):
             print("Saving model...")
             os.makedirs(args.model_path,exist_ok=True)
             torch.save(model.encoder_q.state_dict(), os.path.join(args.model_path,f'model_{epoch}.pth'))
+
+        if epoch == 10:
+            break
 
     if args.wandb:
         run.finish()
@@ -217,14 +226,24 @@ def query_vs_database(model, dataset, args):
     # Wandb Initialization
     run = None
     if args.wandb:
-        run = wandb.init(project= args.dataset + '_' + str(args.output_dim) + '_eval' , notes='')
+        run = wandb.init(project= args.dataset + '_' + str(args.pca_components) + '_eval' , notes='')
         wandb.config.update(args)
 
     model_list = os.listdir(args.model_path)
     model_epochs = sorted([int(model_filename.split('.')[0].split('_')[1])for model_filename in model_list])
+
+    all_refer_ids = []
+    for q_id, v in dataset.annotation.items():
+        for fivr_task in dataset.annotation[q_id].keys():
+            all_refer_ids += dataset.annotation[q_id][fivr_task]
+
+    unique_all_refer_ids = list(set(all_refer_ids))
+
+    # breakpoint()
+
     with torch.no_grad():  # no gradient to keys
         for model_epoch in model_epochs:
-            model_path = os.path.join(args.model_path,f'model_{model_epoch}.pth')
+            model_path = os.path.join(args.model_path, f'model_{model_epoch}.pth')
             print(f'{model_epoch}th loading weights...')
             model.load_state_dict(torch.load(model_path))
             model = model.eval()
@@ -237,6 +256,11 @@ def query_vs_database(model, dataset, args):
                 batch_size=1, shuffle=False)
             # Extract features of the queries
             all_db, queries, queries_ids = set(), [], []
+
+            refers_ids = []
+            refers = []
+            referes_query_ids = []
+
             for feature, feature_len, query_id in tqdm(test_loader):
                 # import pdb;pdb.set_trace()
                 query_id = query_id[0]
@@ -244,6 +268,8 @@ def query_vs_database(model, dataset, args):
                     if args.cuda:
                         feature = feature.cuda()
                         feature_len = feature_len.cuda()
+                    # breakpoint()
+
                     # queries.append(model(feature, feature_len).detach().cpu().numpy()[0])
                     if args.metric == 'cosine':
                         queries.append(model(feature, feature_len).detach().cpu().numpy())
@@ -251,7 +277,9 @@ def query_vs_database(model, dataset, args):
                         queries.append(model.encode(feature, feature_len).detach().cpu().numpy()[0])
                     queries_ids.append(query_id)
                     all_db.add(query_id)
+
             queries = np.array(queries)
+
 
             test_loader = DataLoader(
                 FeatureDataset(vid2features, dataset.get_database(),
@@ -273,16 +301,33 @@ def query_vs_database(model, dataset, args):
                         embedding = model.encode(
                             feature, feature_len).detach().cpu().numpy()[0]
                     all_db.add(video_id)
+                    refers_ids.append(video_id)
+                    q_in = False
+                    if video_id in unique_all_refer_ids:
+                        for q_id, v in dataset.annotation.items():
+                            if q_in :
+                                break
+                            for fivr_task in dataset.annotation[q_id].keys():
+                                if video_id in dataset.annotation[q_id][fivr_task] and q_in == False and q_id in queries_ids:
+                                    referes_query_ids.append(q_id)
+                                    refers.append(embedding)
+                                    q_in = True
+                                    break
+                    else:
+                        referes_query_ids.append('back')
+                        refers.append(embedding)
 
-                    sims = calculate_similarities(queries, embedding, args.metric, None)
+                    # sims = calculate_similarities(queries, embedding, args.metric, None)
 
-                    for i, s in enumerate(sims):
-                        similarities[queries_ids[i]][video_id] = float(s)
+                    # for i, s in enumerate(sims):
+                    #     similarities[queries_ids[i]][video_id] = float(s)
+
+            refers = np.array(refers)
+
 
             if args.wandb:
                 if 'VCDB' in args.dataset:
                     avg_precs = dataset.evaluate(similarities, all_db)
-
 
                 if 'FIVR' in args.dataset:
                     DSVR, CSVR, ISVR = dataset.evaluate(similarities, all_db)
@@ -290,14 +335,64 @@ def query_vs_database(model, dataset, args):
                     wandb.log({'CSVR': np.mean(CSVR), 'epoch': model_epoch})
                     wandb.log({'ISVR': np.mean(ISVR), 'epoch': model_epoch})
 
+                    q_ids = queries_ids + referes_query_ids
+                    q_nums = []
+                    q_dict = {}
+                    for idx, q_id in enumerate(queries_ids):
+                        q_dict[q_id] = idx + 1
+                    q_dict['back'] = 0
+                    for idx, id in enumerate(q_ids):
+                        try:
+                            q_nums.append(q_dict[id])
+                        except:
+                            breakpoint()
+
+                    model = TSNE(n_components=2)
+                    sns.set(style='white', rc={'figure.figsize': (14, 10)})
+                    ts = model.fit_transform(np.squeeze(np.concatenate((queries, refers), axis=0)))
+
+                    new_ts = []
+                    new_nums = []
+                    back_ts = []
+                    back_nums = []
+                    for t, num in zip(ts, q_nums):
+                        if num == 0:
+                            back_ts.append(t)
+                            back_nums.append(num)
+                        else:
+                            new_ts.append(t)
+                            new_nums.append(num)
+                    new_ts = np.array(new_ts)
+                    back_ts = np.array(back_ts)
+
+                    new_ts = new_ts[:, :]
+                    back_ts = back_ts[:, :]
+                    new_nums = new_nums[:]
+
+                    plt.scatter(new_ts[:, 0], new_ts[:, 1], s=10, c=new_nums, cmap='Spectral')
+                    plt.scatter(back_ts[:, 0], back_ts[:, 1], s=10, alpha=0.3, c='grey')
+                    plt.gca().set_aspect('equal', 'datalim')
+                    # plt.colorbar(boundaries=np.arange(11) - 0.5).set_ticks(np.arange(10))
+                    plt.axis('off')
+                    # plt.set_xticks(())
+                    # plt.set_yticks(())
+                    plt.show()
+                    plt.savefig(f'tsne/CTCA_{np.mean(DSVR)}_{np.mean(CSVR)}_{np.mean(ISVR)}_{args.dataset}_{model_epoch}.png', dpi=300)
 
                 if 'CC_WEB' in args.dataset:
                     dataset.evaluate(similarities, all_db)
 
+
             del similarities
             del all_db
+
+
+
         if args.wandb:
             run.finish()
+
+
+
 
 def fivr_concat_features(new_concat_feature_path , eval_frame_feature_path, eval_segment_feature_path, version='5K'):
     import pickle as pk
@@ -339,6 +434,7 @@ def fivr_concat_features(new_concat_feature_path , eval_frame_feature_path, eval
                 print(vid,' is not exists')
 
     print('...concat features saved')
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-ap', '--annotation_path', type=str, default='/workspace/CTCA/datasets/vcdb.pickle',
@@ -349,12 +445,10 @@ def main():
                         help='Path to the kv dataset that contains the features of the train set')
     parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/vcdb-byol_rmac-segment_89325_TCA_momentum',
                         help='Directory where the generated files will be stored')
-    parser.add_argument('-a', '--augmentation', type=bool, default=False,
+    parser.add_argument('-a', '--augmentation', type=bool, default=True,
                         help='augmentation of clip-level features')
-    # parser.add_argument('-nc', '--num_clusters', type=int, default=256,
-    #                     help='Number of clusters of the NetVLAD model')
-    parser.add_argument('-ff', '--feedforward', type=int, default=4096,
-                        help='Number of dim of the Transformer feedforward.')
+    parser.add_argument('-nc', '--num_clusters', type=int, default=256,
+                        help='Number of clusters of the NetVLAD model')
     parser.add_argument('-od', '--output_dim', type=int, default=2048,
                         help='Dimention of the output embedding of the NetVLAD model')
     parser.add_argument('-nl', '--num_layers', type=int, default=1,
@@ -376,11 +470,8 @@ def main():
     parser.add_argument('-wd', '--weight_decay', type=float, default=1e-4,
                         help='Regularization parameter of the DML network. Default: 10^-4')
 
-    parser.add_argument('-ffs', '--frame_feature_size', type=int, default=768,
+    parser.add_argument('-pc', '--pca_components', type=int, default=2048,
                         help='Number of components of the PCA module.')
-    parser.add_argument('-tfs', '--temporal_feature_size', type=int, default=256,
-                        help='Number of components of the PCA module.')
-
     parser.add_argument('-ps', '--padding_size', type=int, default=64,
                         help='Padding size of the input data at temporal axis.')
     parser.add_argument('-rs', '--random_sampling', action='store_true',
@@ -391,7 +482,7 @@ def main():
                         help='Number of workers of dataloader')
 
     # moco specific configs:
-    parser.add_argument('-mk','--moco_k', default=4096, type=int,
+    parser.add_argument('-mk','--moco_k', default=65536, type=int,
                         help='queue size; number of negative keys (default: 65536)')
     parser.add_argument('-mm','--moco_m', default=0.999, type=float,
                         help='moco momentum of updating key encoder (default: 0.999)')
@@ -440,7 +531,6 @@ def main():
 
     train(args)
 
-
     if 'CC_WEB' in args.dataset:
         from data import CC_WEB_VIDEO
         dataset = CC_WEB_VIDEO()
@@ -461,7 +551,7 @@ def main():
         raise Exception('[ERROR] Not supported evaluation dataset. '
                         'Supported options: \"CC_WEB_VIDEO\", \"VCDB\", \"FIVR-200K\", \"FIVR-5K\", \"EVVE\"')
 
-    model = CTCA_LATE_FC(frame_feature_size=args.frame_feature_size, temporal_feature_size=args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers)
+    model = CTCA(feature_size=args.pca_components, nlayers=args.num_layers)
 
     if os.path.exists(args.eval_feature_path):
         os.remove(args.eval_feature_path)
@@ -470,3 +560,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+

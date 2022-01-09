@@ -14,7 +14,7 @@ from tqdm import tqdm
 import horovod.torch as hvd
 import utils
 from data import VCDBPairDataset,FSAVCDBPairDataset
-from model import NetVLAD, MoCo, NeXtVLAD, LSTMModule, GRUModule, CTCA
+from model import MoCo, CTCA_LATE_PLUS
 import wandb
 from scipy.spatial.distance import cdist
 import h5py
@@ -55,7 +55,7 @@ def train(args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_sz,
                               sampler=train_sampler, drop_last=True, **kwargs)
 
-    model = CTCA(feature_size=args.pca_components, feedforward =args.feedforward, nlayers=args.num_layers, dropout=0.2)
+    model = CTCA_LATE_PLUS(frame_feature_size=args.frame_feature_size,temporal_feature_size= args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers, dropout=0.2)
     # model = NeXtVLAD(feature_size=args.pca_components)
     model = MoCo(model, dim=args.output_dim, K=args.moco_k, m=args.moco_m, T=args.moco_t,mlp=args.mlp)
 
@@ -64,6 +64,7 @@ def train(args):
 
     if args.cuda:
         # Move model to GPU.
+
         model.cuda()
         # If using GPU Adasum allreduce, scale learning rate by local_size.
         if args.use_adasum and hvd.nccl_built():
@@ -142,8 +143,6 @@ def train(args):
             os.makedirs(args.model_path,exist_ok=True)
             torch.save(model.encoder_q.state_dict(), os.path.join(args.model_path,f'model_{epoch}.pth'))
 
-        if epoch == 40:
-            break
     if args.wandb:
         run.finish()
     del model
@@ -298,7 +297,6 @@ def query_vs_database(model, dataset, args):
 
             del similarities
             del all_db
-
         if args.wandb:
             run.finish()
 
@@ -339,11 +337,11 @@ def fivr_concat_features(new_concat_feature_path , eval_frame_feature_path, eval
                         print(i)
 
             except:
-                breakpoint()
                 print(vid,' is not exists')
 
     print('...concat features saved')
 def main():
+
     parser = argparse.ArgumentParser()
     parser.add_argument('-ap', '--annotation_path', type=str, default='/workspace/CTCA/datasets/vcdb.pickle',
                         help='Path to the .pk file that contains the annotations of the train set')
@@ -351,7 +349,7 @@ def main():
                         help='Path to the kv dataset that contains the features of the train set')
     parser.add_argument('-sp', '--segment_feature_path', type=str, default='/workspace/CTCA/pre_processing/vcdb-segment_l2norm_89325.hdf5',
                         help='Path to the kv dataset that contains the features of the train set')
-    parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/vcdb-byol_rmac-segment-1024+1024-late+plus-wiz',
+    parser.add_argument('-mp', '--model_path', type=str, default='/mldisk/nfs_shared_/dh/weights/vcdb-byol_rmac-segment_89325_TCA_momentum',
                         help='Directory where the generated files will be stored')
     parser.add_argument('-a', '--augmentation', type=bool, default=False,
                         help='augmentation of clip-level features')
@@ -368,7 +366,7 @@ def main():
     parser.add_argument('-nn', '--neg_num', type=int, default=16,
                         help='Number of negative samples of each batch')
 
-    parser.add_argument('-e', '--epochs', type=int, default=61,
+    parser.add_argument('-e', '--epochs', type=int, default=71,
                         help='Number of epochs to train the DML network. Default: 5')
     parser.add_argument('-bs', '--batch_sz', type=int, default=64,
                         help='Number of triplets fed every training iteration. '
@@ -380,8 +378,11 @@ def main():
     parser.add_argument('-wd', '--weight_decay', type=float, default=1e-4,
                         help='Regularization parameter of the DML network. Default: 10^-4')
 
-    parser.add_argument('-pc', '--pca_components', type=int, default=2048,
+    parser.add_argument('-ffs', '--frame_feature_size', type=int, default=1024,
                         help='Number of components of the PCA module.')
+    parser.add_argument('-tfs', '--temporal_feature_size', type=int, default=1024,
+                        help='Number of components of the PCA module.')
+
     parser.add_argument('-ps', '--padding_size', type=int, default=64,
                         help='Padding size of the input data at temporal axis.')
     parser.add_argument('-rs', '--random_sampling', action='store_true',
@@ -413,11 +414,11 @@ def main():
     parser.add_argument('-d', '--dataset', type=str, default='FIVR-200K',
                         help='Name of evaluation dataset. Options: CC_WEB_VIDEO, VCDB, '
                              '\"FIVR-200K\", \"FIVR-5K\", \"EVVE\"')
-    parser.add_argument('-efp', '--eval_feature_path', type=str, default='/workspace/CTCA/pre_processing/fivr-byol_rmac_segment_l2norm.hdf5',
+    parser.add_argument('-efp', '--eval_feature_path', type=str, default='/workspace/CTCA/pre_processing/fivr-byol_rmac_segment_l2norm_1024+1024.hdf5',
                         help='Path to the .hdf5 file that contains the features of the dataset')
     parser.add_argument('-effp', '--eval_frame_feature_path', type=str, default='/workspace/CTCA/pre_processing/fivr-byol_rmac_187563.hdf5',
                         help='Path to the .hdf5 file that contains the features of the dataset')
-    parser.add_argument('-efsp', '--eval_segment_feature_path', type=str, default='/workspace/CTCA/pre_processing/fivr-segment_l2norm_7725.hdf5',
+    parser.add_argument('-efsp', '--eval_segment_feature_path', type=str, default='/workspace/CTCA/pre_processing/fivr-segment_l2norm_187260_1024.hdf5',
                         help='Path to the kv dataset that contains the features of the train set')
     parser.add_argument('-eps', '--eval_padding_size', type=int, default=300,
                         help='Padding size of the input data at temporal axis')
@@ -462,7 +463,7 @@ def main():
         raise Exception('[ERROR] Not supported evaluation dataset. '
                         'Supported options: \"CC_WEB_VIDEO\", \"VCDB\", \"FIVR-200K\", \"FIVR-5K\", \"EVVE\"')
 
-    model = CTCA(feature_size=args.pca_components, feedforward=args.feedforward , nlayers=args.num_layers)
+    model = CTCA_LATE_PLUS(frame_feature_size=args.frame_feature_size, temporal_feature_size=args.temporal_feature_size, feedforward=args.feedforward , nlayers=args.num_layers)
 
     if os.path.exists(args.eval_feature_path):
         os.remove(args.eval_feature_path)

@@ -15,3 +15,15 @@ This project is licensed under the Apache License 2.0 - see the LICENSE file for
 
 ## Contact
 donghoon.rhie@gmail.com
+
+## Citation
+If you use this code for your research, please our paper.
+```
+@masterthesis{__2022,
+   title = {사건 단위 비디오 검색을 위한 키프레임 특징과 시간-의존적 특징 벡터를 융합한 비디오 특징 벡터 생성 방법},
+   url = {http://www.riss.kr/link?id=T16013478},
+   school = {서강대학교 대학원},
+   author = {{이동훈}},
+   year = {2022},
+   note = {국내석사학위논문},
+}
